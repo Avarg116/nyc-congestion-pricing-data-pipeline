@@ -15,5 +15,16 @@ services:
     networks:
       - airflow
 
+  superset:
+    image: rideledger-superset
+    env_file: .env
+    ports:
+      - "127.0.0.1:8088:8088"
+    volumes:
+      - superset_data:/app/superset_home
+    networks:
+      - airflow
+
 volumes:
   warehouse_data:
+  superset_data:
