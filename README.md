@@ -1,9 +1,8 @@
 # NYC Congestion Pricing Data Pipeline
 
-![CI](https://github.com/Avarg116/NYC-Rideshare-Data-Pipeline/actions/workflows/ci.yml/badge.svg)
+![CI](https://github.com/Avarg116/NYC-Congestion-Pricing-Data-Pipeline/actions/workflows/ci.yml/badge.svg)
 
-An Airflow pipeline that loads 90.5M NYC Uber trips into S3 and a partitioned PostgreSQL warehouse,
-then models them with dbt to see what changed after NYC congestion pricing started.
+An Airflow pipeline that loads 90.5M NYC Uber trips into S3 and a PostgreSQL warehouse, then models them with dbt to see what changed after NYC congestion pricing started.
 
 ## How it works
 
@@ -11,50 +10,53 @@ then models them with dbt to see what changed after NYC congestion pricing start
 flowchart LR
     T[NYC TLC<br/>Parquet files] -->|download| A[Airflow DAG]
     A -->|raw copy| S[(S3)]
-    A -->|COPY| P[(PostgreSQL<br/>raw.uber_trips<br/>one partition per month)]
+    A -->|COPY| P[(PostgreSQL<br/>raw.uber_trips<br/>1 partition per month)]
     P --> D[dbt models<br/>run with Cosmos]
     D --> M[(fact + mart tables)]
 ```
 
-1. Once a month, the DAG checks that the TLC file for that month is published.
-2. It downloads the Parquet file and uploads a raw copy to S3.
-3. It loads only the Uber trips into that month's partition of `raw.uber_trips`.
-4. dbt cleans the trips and builds the fact and mart tables. Cosmos runs each dbt model and test as its own Airflow task.
+1. Airflow downloads monthly NYC TLC trip data.
+2. It uploads a raw copy to S3.
+3. It loads the Uber trips into a PostgreSQL table partitioned by month.
+4. dbt cleans and models the data. Cosmos runs each dbt model as its own Airflow task.
 
 ## Results
 
 Data: https://www.nyc.gov/site/tlc/about/tlc-trip-record-data.page, Oct 2024 to Mar 2025, 90,527,002 Uber trips. I removed 51,741 bad trips.
 
-Congestion pricing started on January 5, 2025. Trips that start or end in the Manhattan congestion zone (CBD) pay the fee.
+Congestion pricing started on January 5, 2025. Trips that start or end in the Manhattan congestion zone pay the fee.
+
+![Trips per day before and after congestion pricing](images/trips_per_day.jpg)
 
 | Trips per day | Before | After | Change |
 |---|---|---|---|
-| CBD trips | 167,944 | 161,494 | -3.8% |
+| Congestion zone trips | 167,944 | 161,494 | -3.8% |
 | Other trips | 332,493 | 331,917 | -0.2% |
 
 | Driver share of the fare | Before | After |
 |---|---|---|
-| CBD trips | 71.2% | 66.9% |
+| Congestion zone trips | 71.2% | 66.9% |
 | Other trips | 83.5% | 80.2% |
 
-CBD trips dropped about 3.8% while trips everywhere else stayed almost the same. Driver share dropped everywhere, so that part is probably not only because of congestion pricing. Manhattan had the lowest driver share (69.7%) and the Bronx had the highest (86.5%).
+Congestion zone trips dropped about 3.8% while trips everywhere else stayed almost the same. Driver share dropped everywhere, so that part is probably not only because of congestion pricing. Manhattan had the lowest driver share (69.7%) and the Bronx had the highest (86.5%).
 
 ## Key decisions
 
 - **Idempotent loads:** I partitioned the raw table by month, so re-running a month only reloads that month. I re-ran March and the count stayed at 14,547,181.
 - **Least privilege:** `loader_role` can only write to `raw`, and `dbt_role` can only read `raw` and write to its own schema.
-- **Validated the congestion zone:** I made my own list of the 38 taxi zones in the zone and checked it with the fee column. Almost every trip in those zones paid the fee after January 5.
+- **Validated the congestion zone:** I made my own list of the 38 taxi zones in the congestion zone and checked it with the fee column. Almost every trip in those zones paid the fee after January 5.
 - **Data quality tests:** A dbt test found 1,828 trips with negative driver pay, so I filtered them out.
 
 ## Run it
 
 Requirements: Astro CLI, Docker, an S3 bucket with an IAM user that can access it.
 
-1. Create a `.env` file with `POSTGRES_PASSWORD`, `POSTGRES_DB=warehouse`, `LOADER_PASSWORD`, `DBT_PASSWORD`, `S3_BUCKET`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_DEFAULT_REGION`.
+1. Create a `.env` file with `POSTGRES_PASSWORD`, `POSTGRES_DB=warehouse`, `LOADER_PASSWORD`, `DBT_PASSWORD`, `S3_BUCKET`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_DEFAULT_REGION` and `SUPERSET_SECRET_KEY`.
 
 2. Start Airflow and the warehouse:
 
 ```bash
+docker build -t rideledger-superset ./superset
 astro dev start
 ```
 
